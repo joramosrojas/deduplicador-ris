@@ -1,0 +1,7 @@
+backend/venv/
+backend/__pycache__/
+backend/sessions/
+__pycache__/
+*.pyc
+*.pyo
+.env

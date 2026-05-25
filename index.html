@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Detector de Duplicados RIS</title>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+
+  <header class="header">
+    <div class="header-inner">
+      <div class="header-left">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" rx="7" fill="#0d7377"/>
+          <rect x="6" y="7" width="13" height="2.5" rx="1.25" fill="white"/>
+          <rect x="6" y="12" width="18" height="2.5" rx="1.25" fill="white"/>
+          <rect x="6" y="17" width="11" height="2.5" rx="1.25" fill="white"/>
+          <circle cx="23" cy="23" r="6" fill="#f59e0b" stroke="white" stroke-width="1.5"/>
+          <path d="M20.5 23h5M23 20.5v5" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <h1 class="header-title">Detector de Duplicados RIS</h1>
+          <span class="header-sub">Identificación de referencias duplicadas por similitud de título y resumen</span>
+        </div>
+      </div>
+      <div class="header-right" id="header-stats" style="display:none">
+        <span class="hstat" id="hstat-total"></span>
+        <span class="hstat hstat-warn" id="hstat-dups"></span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="app-tabs">
+    <button class="app-tab active" data-tab="general">Deduplicación General</button>
+    <button class="app-tab" data-tab="epistemo">Epistemonikos</button>
+    <button class="app-tab" data-tab="massive">Gran Escala</button>
+  </nav>
+
+  <!-- ═══════════════════ UPLOAD ═══════════════════ -->
+  <section class="section active" id="sec-upload">
+    <div class="upload-layout">
+
+      <div class="drop-zone" id="drop-zone">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.3">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="12" y1="11" x2="12" y2="17"/>
+          <line x1="9" y1="14" x2="15" y2="14"/>
+        </svg>
+        <p class="drop-main">Arrastra archivos <strong>.ris</strong> o <strong>.nbib</strong> aquí</p>
+        <p class="drop-sub">o haz clic para buscar · Puedes subir varios archivos a la vez</p>
+        <input type="file" id="file-input" accept=".ris,.nbib" multiple style="display:none"/>
+      </div>
+
+      <div class="file-list" id="file-list" style="display:none">
+        <div class="file-list-header">
+          <span class="file-list-title">Archivos cargados</span>
+          <button class="btn-text" id="btn-clear-files">Limpiar</button>
+        </div>
+        <div id="file-items"></div>
+        <div class="file-total" id="file-total"></div>
+      </div>
+
+      <div class="settings-card">
+        <h3 class="settings-title">Configuración de detección</h3>
+        <div class="setting-row">
+          <label class="setting-label">
+            <span>Umbral de similitud <span class="tt" data-tooltip="Porcentaje mínimo de similitud para que dos referencias se consideren duplicadas. Valor bajo → detecta más candidatos (riesgo de falsos positivos). Valor alto → solo marca duplicados casi idénticos.">?</span></span>
+            <span class="setting-value" id="threshold-val">82%</span>
+          </label>
+          <input type="range" id="threshold-slider" class="slider" min="50" max="100" value="82"/>
+          <div class="slider-legend"><span>Más duplicados</span><span>Solo exactos</span></div>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <span>Peso del título <span class="tt" data-tooltip="Cuánto influye el título vs. el resumen en la puntuación de similitud. Al 80%, el título pesa 4× más que el resumen. Aumenta este valor si los resúmenes están incompletos o son muy cortos.">?</span></span>
+            <span class="setting-value" id="tw-val">80%</span>
+          </label>
+          <input type="range" id="tw-slider" class="slider" min="50" max="100" value="80"/>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <span>Ventana de comparación <span class="tt" data-tooltip="Las referencias se ordenan por título y cada una solo se compara con sus N vecinas más cercanas (algoritmo de vecindad ordenada). Mayor ventana = más cobertura, pero más lento. Recomendado: 80 para colecciones estándar, 150+ si hay muchos duplicados dispersos.">?</span></span>
+            <span class="setting-value" id="win-val">80 refs</span>
+          </label>
+          <input type="range" id="win-slider" class="slider" min="20" max="200" value="80" step="10"/>
+          <p class="setting-hint">Cuántas referencias adyacentes (por título ordenado) se comparan entre sí. Valores mayores detectan más duplicados pero son más lentos.</p>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">Modo de detección <span class="tt" data-tooltip="Elige qué métodos usar para encontrar duplicados. Combinar ambos es lo más recomendado.">?</span></label>
+          <div class="mode-group">
+            <label class="mode-option">
+              <input type="radio" name="dedup-mode" value="id"/>
+              <span class="mode-label">
+                <strong>Solo por ID</strong>
+                <small>Busca AN o DOI exactamente iguales. Rápido y sin falsos positivos, pero solo detecta duplicados de la misma base de datos.</small>
+              </span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="dedup-mode" value="text"/>
+              <span class="mode-label">
+                <strong>Solo por texto</strong>
+                <small>Compara títulos y resúmenes por similitud. Detecta duplicados entre distintas bases de datos aunque tengan IDs diferentes.</small>
+              </span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="dedup-mode" value="both" checked/>
+              <span class="mode-label">
+                <strong>Ambos (recomendado)</strong>
+                <small>Combina ID exacto y similitud textual para la mayor cobertura posible.</small>
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-run" id="btn-run" disabled>
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.8"/><path d="M8 7l5 3-5 3V7z" fill="currentColor"/></svg>
+        Buscar duplicados
+      </button>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════ PROCESSING ═══════════════════ -->
+  <section class="section" id="sec-processing">
+    <div class="processing-layout">
+      <div class="spinner"></div>
+      <p class="proc-title" id="proc-title">Analizando referencias…</p>
+      <p class="proc-sub" id="proc-sub"></p>
+      <div class="proc-bar-bg"><div class="proc-bar-fill" id="proc-bar" style="width:0%"></div></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ RESULTS ═══════════════════ -->
+  <section class="section" id="sec-results">
+
+    <div class="results-toolbar">
+      <div class="results-stats" id="results-stats"></div>
+      <div class="results-actions">
+        <select class="filter-select" id="filter-select" title="Filtra los grupos por nivel de confianza de la detección: DOI/ID = certeza total; Alta ≥90% = muy probable duplicado; Media 75-90% = revisar; Baja <75% = posible">
+          <option value="all">Todos los grupos</option>
+          <option value="exact">Duplicados exactos (DOI)</option>
+          <option value="high">Alta similitud (≥90%)</option>
+          <option value="med">Similitud media (75–90%)</option>
+          <option value="low">Similitud baja (&lt;75%)</option>
+        </select>
+        <div class="epist-filter-pills" id="general-doi-pills">
+          <button class="epist-fpill active" data-general-doi="all" title="Muestra todos los grupos sin filtrar por DOI.">Todos</button>
+          <button class="epist-fpill" data-general-doi="has" title="Muestra solo grupos donde al menos una referencia tiene DOI registrado.">Con DOI</button>
+          <button class="epist-fpill" data-general-doi="no" title="Muestra solo grupos donde ninguna referencia tiene DOI registrado.">Sin DOI</button>
+        </div>
+        <button class="btn-action" id="btn-keep-first-all" title="Marca automáticamente la primera referencia de cada grupo para conservar y el resto para eliminar. Puedes cambiar la decisión individualmente en cada tarjeta.">Conservar primera en cada grupo</button>
+        <button class="btn-export" id="btn-export-ris" title="Descarga un archivo .ris con todas las referencias excepto las marcadas para eliminar. Listo para importar en tu gestor de referencias (Zotero, Mendeley, etc.).">
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 2v10m0 0l-3-3m3 3l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 14v2a2 2 0 002 2h8a2 2 0 002-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Exportar RIS sin duplicados
+        </button>
+        <button class="btn-export btn-export-csv" id="btn-export-csv" title="Descarga una tabla con los pares de duplicados confirmados: AN conservado, AN eliminado, porcentaje de similitud de título y resumen, y motivo de detección.">
+          Exportar duplicados confirmados (CSV)
+        </button>
+        <button class="btn-text" id="btn-back">← Nueva búsqueda</button>
+      </div>
+    </div>
+
+    <div class="remove-banner" id="remove-banner"></div>
+
+    <div class="groups-wrap" id="groups-wrap">
+      <!-- JS rendered -->
+    </div>
+
+    <div class="pagination" id="pagination"></div>
+
+  </section>
+
+  <!-- ═══════════════════ EPISTEMONIKOS UPLOAD ═══════════════════ -->
+  <section class="section" id="sec-epist-upload">
+    <div class="upload-layout">
+
+      <div class="epist-intro">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;margin-top:2px">
+          <circle cx="10" cy="10" r="9" stroke="#0d7377" stroke-width="1.8"/>
+          <path d="M10 9v5M10 6.5v.5" stroke="#0d7377" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <p>Sube RIS exportados desde <strong>Epistemonikos</strong>. Detecta duplicados por DOI, similitud de título y resumen. Al confirmar cada grupo, genera un registro con los <code>AN</code> de ambas referencias para que tu equipo sepa cuál conservar y cuál eliminar de la base de datos.</p>
+      </div>
+
+      <div class="drop-zone" id="epist-drop-zone">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.3">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="12" y1="11" x2="12" y2="17"/>
+          <line x1="9" y1="14" x2="15" y2="14"/>
+        </svg>
+        <p class="drop-main">Arrastra archivos <strong>.ris</strong> de Epistemonikos aquí</p>
+        <p class="drop-sub">o haz clic para buscar · Puedes subir varios archivos a la vez</p>
+        <input type="file" id="epist-file-input" accept=".ris,.nbib" multiple style="display:none"/>
+      </div>
+
+      <div class="file-list" id="epist-file-list" style="display:none">
+        <div class="file-list-header">
+          <span class="file-list-title">Archivos cargados</span>
+          <button class="btn-text" id="epist-btn-clear-files">Limpiar</button>
+        </div>
+        <div id="epist-file-items"></div>
+        <div class="file-total" id="epist-file-total"></div>
+      </div>
+
+      <div class="settings-card">
+        <h3 class="settings-title">Configuración de detección</h3>
+        <div class="setting-row">
+          <label class="setting-label">
+            <span>Umbral de similitud <span class="tt" data-tooltip="Porcentaje mínimo de similitud para que dos referencias se consideren duplicadas. Valor bajo → detecta más candidatos (riesgo de falsos positivos). Valor alto → solo marca duplicados casi idénticos.">?</span></span>
+            <span class="setting-value" id="epist-threshold-val">82%</span>
+          </label>
+          <input type="range" id="epist-threshold-slider" class="slider" min="50" max="100" value="82"/>
+          <div class="slider-legend"><span>Más duplicados</span><span>Solo exactos</span></div>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <span>Peso del título <span class="tt" data-tooltip="Cuánto influye el título vs. el resumen en la puntuación de similitud. Al 80%, el título pesa 4× más que el resumen. Aumenta este valor si los resúmenes están incompletos o son muy cortos.">?</span></span>
+            <span class="setting-value" id="epist-tw-val">80%</span>
+          </label>
+          <input type="range" id="epist-tw-slider" class="slider" min="50" max="100" value="80"/>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <span>Ventana de comparación <span class="tt" data-tooltip="Las referencias se ordenan por título y cada una solo se compara con sus N vecinas más cercanas (algoritmo de vecindad ordenada). Mayor ventana = más cobertura, pero más lento. Recomendado: 80 para colecciones estándar, 150+ si hay muchos duplicados dispersos.">?</span></span>
+            <span class="setting-value" id="epist-win-val">80 refs</span>
+          </label>
+          <input type="range" id="epist-win-slider" class="slider" min="20" max="200" value="80" step="10"/>
+          <p class="setting-hint">Cuántas referencias adyacentes (por título ordenado) se comparan entre sí. Valores mayores detectan más duplicados pero son más lentos.</p>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">Modo de detección <span class="tt" data-tooltip="Elige qué métodos usar para encontrar duplicados. Combinar ambos es lo más recomendado.">?</span></label>
+          <div class="mode-group">
+            <label class="mode-option">
+              <input type="radio" name="epist-mode" value="text"/>
+              <span class="mode-label">
+                <strong>Solo por texto</strong>
+                <small>Compara títulos y resúmenes por similitud. Útil cuando los AN no son comparables entre archivos.</small>
+              </span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="epist-mode" value="both" checked/>
+              <span class="mode-label">
+                <strong>Ambos (recomendado)</strong>
+                <small>Combina DOI exacto, AN, y similitud textual para la mayor cobertura posible.</small>
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-run" id="epist-btn-run" disabled>
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.8"/><path d="M8 7l5 3-5 3V7z" fill="currentColor"/></svg>
+        Buscar duplicados
+      </button>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════ EPISTEMONIKOS RESULTS ═══════════════════ -->
+  <section class="section" id="sec-epist-results">
+
+    <div class="results-toolbar">
+      <div class="results-stats" id="epist-results-stats"></div>
+      <div class="results-actions">
+        <button class="btn-action" id="epist-btn-confirm-all" title="Confirma automáticamente todos los grupos pendientes: conserva la primera referencia de cada grupo y marca el resto como duplicados. Útil cuando confías en la detección automática.">Confirmar todos</button>
+        <button class="btn-export" id="epist-btn-export-ris" title="Descarga un archivo .ris con todas las referencias excepto las marcadas como duplicadas en los conjuntos confirmados.">
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 2v10m0 0l-3-3m3 3l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 14v2a2 2 0 002 2h8a2 2 0 002-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Exportar RIS deduplicado
+        </button>
+        <button class="btn-export btn-export-csv" id="epist-btn-export-csv" title="Descarga una tabla con los conjuntos confirmados: AN conservado y AN(s) eliminado(s) por grupo. Ideal para registrar las decisiones del equipo en Epistemonikos.">
+          Exportar conjuntos confirmados (CSV)
+        </button>
+        <button class="btn-text" id="epist-btn-back">← Nueva búsqueda</button>
+      </div>
+    </div>
+
+    <!-- Confirmed duplicates summary -->
+    <div class="epist-confirmed-bar" id="epist-confirmed-bar" style="display:none">
+      <strong id="epist-confirmed-count">0</strong> conjuntos confirmados
+      <button class="btn-text" id="epist-btn-show-confirmed">Ver tabla de confirmados ▾</button>
+    </div>
+
+    <!-- Confirmed duplicates table -->
+    <div class="epist-confirmed-section" id="epist-confirmed-section" style="display:none">
+      <div class="epist-section-title">Conjuntos de duplicados confirmados</div>
+      <div class="epist-table-wrap" id="epist-confirmed-table"></div>
+    </div>
+
+    <!-- Category tabs + filters -->
+    <div class="epist-cat-tabs" id="epist-cat-tabs">
+      <button class="epist-cat-tab active" data-cat="all" title="Muestra todos los grupos pendientes de revisión, sin filtrar por tipo de detección.">Todos <span class="cat-count" id="cnt-all"></span></button>
+      <button class="epist-cat-tab" data-cat="doi" title="Grupos donde al menos dos referencias comparten exactamente el mismo DOI. Alta certeza de duplicado." >DOI exacto <span class="cat-count" id="cnt-doi"></span></button>
+      <button class="epist-cat-tab" data-cat="an" title="Grupos detectados porque dos o más referencias tienen el mismo número de acceso (AN) en Epistemonikos.">ID externo <span class="cat-count" id="cnt-an"></span></button>
+      <button class="epist-cat-tab" data-cat="title_combined" title="Grupos detectados por alta similitud en el texto del título y/o resumen. Requieren revisión manual para confirmar.">Título / Resumen <span class="cat-count" id="cnt-title_combined"></span></button>
+      <button class="epist-cat-tab" data-cat="journal" title="Grupos donde la similitud incluye el nombre de la revista como factor relevante en la puntuación.">Revista <span class="cat-count" id="cnt-journal"></span></button>
+
+      <!-- DOI filter — always visible; match filter only for title_combined tab -->
+      <div class="epist-tab-filters" id="epist-tab-filters">
+        <div class="epist-filter-group">
+          <span class="epist-filter-label">
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M3 5h14M6 10h8M9 15h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            DOI
+          </span>
+          <div class="epist-filter-pills" id="filter-doi-pills">
+            <button class="epist-fpill active" data-doi-filter="all" title="Muestra todos los grupos sin filtrar por DOI.">Todos</button>
+            <button class="epist-fpill" data-doi-filter="same" title="Las referencias también comparten el mismo DOI → alta confianza de que son duplicados.">Mismo DOI</button>
+            <button class="epist-fpill epist-fpill-warn" data-doi-filter="distinct" title="⚠ Las referencias tienen DOIs distintos pero título/resumen similar. Puede ser una edición diferente, errata, o un falso positivo. Revisar con atención.">DOIs distintos ⚠</button>
+            <button class="epist-fpill" data-doi-filter="none" title="Ninguna de las referencias tiene DOI registrado.">Sin DOI</button>
+          </div>
+        </div>
+        <div class="epist-filter-divider" id="epist-match-divider" style="display:none"></div>
+        <div class="epist-filter-group" id="epist-match-filter-group" style="display:none">
+          <span class="epist-filter-label">
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><rect x="3" y="4" width="14" height="2.5" rx="1.25" fill="currentColor"/><rect x="3" y="9" width="10" height="2.5" rx="1.25" fill="currentColor"/><rect x="3" y="14" width="7" height="2.5" rx="1.25" fill="currentColor"/></svg>
+            Coincidencia
+          </span>
+          <div class="epist-filter-pills" id="filter-match-pills">
+            <button class="epist-fpill active" data-match-filter="all" title="Muestra todos los grupos detectados por texto, sin importar si la similitud fue por título, resumen, o ambos.">Título o resumen</button>
+            <button class="epist-fpill" data-match-filter="title_abstract" title="Solo grupos donde tanto el título como el resumen contribuyeron a la similitud. Mayor confianza.">Título + resumen</button>
+            <button class="epist-fpill" data-match-filter="title" title="Solo grupos detectados por similitud de título (sin resumen disponible o muy corto). Revisar con más cuidado.">Solo título</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pending groups -->
+    <div class="epist-pending-section" id="epist-pending-section">
+      <div class="epist-section-title" id="epist-pending-title">Grupos pendientes de revisión</div>
+      <div class="epist-groups-list" id="epist-groups-list"></div>
+      <div class="pagination" id="epist-pagination"></div>
+    </div>
+
+  </section>
+
+  <!-- ═══════════════════ GRAN ESCALA — SESIONES ══════════════════ -->
+  <section class="section" id="sec-massive-sessions">
+    <div class="sessions-layout">
+      <div class="sessions-header">
+        <div>
+          <h2 style="font-size:1.15rem;font-weight:700;color:var(--text);margin:0">Gran Escala — Sesiones</h2>
+          <p style="font-size:.85rem;color:var(--text-muted);margin:4px 0 0">Retoma una sesión anterior o inicia un nuevo análisis.</p>
+        </div>
+        <button class="btn-primary" id="sessions-btn-new">+ Nueva sesión</button>
+      </div>
+      <div id="sessions-list"><!-- JS rendered --></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ GRAN ESCALA — UPLOAD ═══════════════════ -->
+  <section class="section" id="sec-massive-upload">
+    <div class="upload-layout">
+
+      <div class="epist-intro">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;margin-top:2px">
+          <circle cx="10" cy="10" r="9" stroke="#0d7377" stroke-width="1.8"/>
+          <path d="M10 9v5M10 6.5v.5" stroke="#0d7377" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <p>Modo de <strong>gran escala</strong>: procesa hasta <strong>~1.000.000 de referencias</strong> usando el backend Python local. Sube tus archivos RIS, ajusta la configuración y el servidor hará el análisis. Los resultados se presentan por categoría para que confirmes o descartes cada lote.</p>
+      </div>
+
+      <div class="massive-backend-warn" id="massive-backend-warn" style="display:none">
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 2L2 17h16L10 2z" stroke="#d97706" stroke-width="1.8" stroke-linejoin="round"/><path d="M10 8v4M10 14v.5" stroke="#d97706" stroke-width="2" stroke-linecap="round"/></svg>
+        <div>
+          <strong>Backend no detectado.</strong> Inicia el servidor antes de usar esta sección:<br>
+          <code>cd backend &amp;&amp; python main.py</code><br>
+          Luego abre <code>http://localhost:8000</code> en tu navegador.
+        </div>
+      </div>
+
+      <div class="drop-zone" id="massive-drop-zone">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.3">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="12" y1="11" x2="12" y2="17"/>
+          <line x1="9" y1="14" x2="15" y2="14"/>
+        </svg>
+        <p class="drop-main">Arrastra archivos <strong>.ris</strong> o <strong>.nbib</strong> aquí</p>
+        <p class="drop-sub">o haz clic para buscar · Puedes subir varios archivos a la vez</p>
+        <input type="file" id="massive-file-input" accept=".ris,.nbib" multiple style="display:none"/>
+      </div>
+
+      <div class="file-list" id="massive-file-list" style="display:none">
+        <div class="file-list-header">
+          <span class="file-list-title">Archivos cargados</span>
+          <button class="btn-text" id="massive-btn-clear">Limpiar</button>
+        </div>
+        <div id="massive-file-items"></div>
+        <div class="file-total" id="massive-file-total"></div>
+      </div>
+
+      <div class="settings-card">
+        <h3 class="settings-title">Configuración de detección</h3>
+        <div class="setting-row">
+          <label class="setting-label">
+            <span>Umbral de similitud <span class="tt" data-tooltip="Porcentaje mínimo de similitud para que dos referencias se consideren duplicadas.">?</span></span>
+            <span class="setting-value" id="massive-threshold-val">82%</span>
+          </label>
+          <input type="range" id="massive-threshold-slider" class="slider" min="50" max="100" value="82"/>
+          <div class="slider-legend"><span>Más duplicados</span><span>Solo exactos</span></div>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <span>Ventana de comparación <span class="tt" data-tooltip="Referencias adyacentes comparadas entre sí. Mayor ventana = más cobertura, más lento.">?</span></span>
+            <span class="setting-value" id="massive-win-val">80 refs</span>
+          </label>
+          <input type="range" id="massive-win-slider" class="slider" min="20" max="200" value="80" step="10"/>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">Modo de detección <span class="tt" data-tooltip="Elige qué métodos usar para encontrar duplicados.">?</span></label>
+          <div class="mode-group">
+            <label class="mode-option">
+              <input type="radio" name="massive-mode" value="id"/>
+              <span class="mode-label">
+                <strong>Solo por ID</strong>
+                <small>Busca AN o DOI exactamente iguales.</small>
+              </span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="massive-mode" value="text"/>
+              <span class="mode-label">
+                <strong>Solo por texto</strong>
+                <small>Similitud de título y resumen.</small>
+              </span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="massive-mode" value="both" checked/>
+              <span class="mode-label">
+                <strong>Ambos (recomendado)</strong>
+                <small>ID exacto + similitud textual.</small>
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-run" id="massive-btn-run" disabled>
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.8"/><path d="M8 7l5 3-5 3V7z" fill="currentColor"/></svg>
+        Buscar duplicados (vía backend)
+      </button>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════ GRAN ESCALA — REVISIÓN INDIVIDUAL ═══════════════════ -->
+  <section class="section" id="sec-massive-review">
+    <div class="massive-results-layout">
+
+      <div class="massive-review-header-bar">
+        <button class="btn-text" id="review-btn-back">← Volver a categorías</button>
+        <div class="massive-review-title-wrap">
+          <span class="massive-review-cat-label" id="review-cat-label"></span>
+          <span class="massive-review-progress" id="review-progress"></span>
+        </div>
+        <div class="epist-filter-pills" id="review-doi-pills">
+          <button class="epist-fpill active" data-review-doi="all" title="Muestra todos los grupos sin filtrar por DOI.">Todos</button>
+          <button class="epist-fpill" data-review-doi="has" title="Solo grupos donde al menos una referencia tiene DOI.">Con DOI</button>
+          <button class="epist-fpill" data-review-doi="no" title="Solo grupos donde ninguna referencia tiene DOI.">Sin DOI</button>
+        </div>
+      </div>
+
+      <div class="massive-review-groups" id="review-groups">
+        <!-- JS rendered -->
+      </div>
+
+      <div class="pagination" id="review-pagination"></div>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════ GRAN ESCALA — RESULTADOS ═══════════════════ -->
+  <section class="section" id="sec-massive-results">
+    <div class="massive-results-layout">
+
+      <div class="results-toolbar">
+        <div class="results-stats" id="massive-stats"></div>
+        <div class="results-actions">
+          <button class="btn-action" id="massive-btn-confirm-all" title="Confirma todos los lotes pendientes con la primera referencia de cada grupo como conservada.">Confirmar todos los lotes</button>
+          <button class="btn-export" id="massive-btn-export" title="Aplica las decisiones tomadas y descarga el RIS limpio + CSV de duplicados.">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 2v10m0 0l-3-3m3 3l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 14v2a2 2 0 002 2h8a2 2 0 002-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Exportar y descargar
+          </button>
+          <button class="btn-text" id="massive-btn-back">← Nueva búsqueda</button>
+          <button class="btn-text" id="massive-btn-sessions">☰ Sesiones</button>
+        </div>
+      </div>
+
+      <div class="massive-export-result" id="massive-export-result" style="display:none"></div>
+
+      <div class="batch-cards" id="batch-cards">
+        <!-- JS rendered -->
+      </div>
+
+    </div>
+  </section>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="ris-parser.js"></script>
+  <script src="dedup.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

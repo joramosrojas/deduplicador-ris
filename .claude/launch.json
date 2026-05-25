@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "deduplicador-ris",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "3458"],
+      "port": 3458,
+      "autoPort": false
+    }
+  ]
+}
+

@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Abrir en navegador",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "3458"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "serverReadyAction": {
+        "pattern": "Serving HTTP",
+        "uriFormat": "http://localhost:3458",
+        "action": "openExternally"
+      }
+    }
+  ]
+}
