@@ -1456,12 +1456,14 @@ async function epistemShowSessions() {
 
 async function epistemSaveToBackend() {
   try {
-    const filenames = ep.files.map(f => f.name);
+    const filenames  = ep.files.map(f => f.name);
+    const customName = document.getElementById('epist-session-name')?.value.trim();
+    const name       = customName || filenames.join(', ') || 'Sin nombre';
     const res = await fetch('/api/sessions/save', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name:      filenames.join(', ') || 'Sin nombre',
+        name,
         mode:      'epistemo',
         filenames,
         refs:      ep.allRefs,
