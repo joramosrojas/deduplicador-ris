@@ -1340,7 +1340,8 @@ async function massiveShowSessions() {
   list.innerHTML = '<div style="text-align:center;padding:40px;color:#94a3b8">Cargando sesiones…</div>';
   try {
     const res      = await fetch('/api/sessions');
-    const sessions = await res.json();
+    const all      = await res.json();
+    const sessions = all.filter(s => (s.mode || 'massive') === 'massive');
     if (!sessions.length) {
       list.innerHTML = `<div class="sessions-empty">
         <p style="font-weight:600">No hay sesiones guardadas</p>
