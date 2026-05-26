@@ -1,4 +1,30 @@
 /* =========================================================
+   HOME SEARCH
+   ========================================================= */
+.home-search-input {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: .85rem;
+  background: var(--white);
+  color: var(--text);
+  min-width: 260px;
+  outline: none;
+  transition: border-color .15s;
+}
+.home-search-input:focus { border-color: var(--teal); }
+
+.home-session-mode {
+  display: inline-block;
+  font-size: .7rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 10px;
+  background: var(--blue-bg); color: var(--blue);
+}
+.home-session-mode.mode-massive  { background: #ede9fe; color: #7c3aed; }
+.home-session-mode.mode-epistemo { background: var(--teal-light); color: var(--teal); }
+
+/* =========================================================
    RESET & BASE
    ========================================================= */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

@@ -37,8 +37,27 @@
     <button class="app-tab" data-tab="massive">Gran Escala</button>
   </nav>
 
+  <!-- ═══════════════════ HOME — SESIONES ═══════════════════ -->
+  <section class="section active" id="sec-home">
+    <div class="sessions-layout">
+      <div class="sessions-header">
+        <div>
+          <h2 style="font-size:1.2rem;font-weight:700;color:var(--text);margin:0">Sesiones</h2>
+          <p style="font-size:.85rem;color:var(--text-muted);margin:4px 0 0">Retoma una sesión anterior o inicia un nuevo análisis.</p>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="home-search" class="home-search-input" placeholder="Buscar por nombre o archivo…"/>
+          <button class="btn-primary" id="home-btn-new">+ Nueva sesión</button>
+        </div>
+      </div>
+      <div id="home-sessions-list">
+        <div style="text-align:center;padding:60px;color:#94a3b8">Cargando sesiones…</div>
+      </div>
+    </div>
+  </section>
+
   <!-- ═══════════════════ UPLOAD ═══════════════════ -->
-  <section class="section active" id="sec-upload">
+  <section class="section" id="sec-upload">
     <div class="upload-layout">
 
       <div class="drop-zone" id="drop-zone">

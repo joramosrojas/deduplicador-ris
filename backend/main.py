@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 
 from dedup_engine import run_dedup
 from ris_parser import detect_format, parse_nbib, parse_ris, refs_to_ris
+import database as db
 
 app = FastAPI(title="Deduplicador RIS – Backend Masivo")
 
@@ -42,9 +43,11 @@ app.add_middleware(
 # In-memory job store  {job_id: {...}}
 jobs: dict[str, dict] = {}
 
-# Persistent sessions directory
+# Persistent sessions directory (used as fallback when DATABASE_URL is not set)
 SESSIONS_DIR = Path(__file__).parent / 'sessions'
 SESSIONS_DIR.mkdir(exist_ok=True)
+
+db.init_db()
 
 # ── Helpers ──────────────────────────────────────────────────
 
@@ -81,15 +84,59 @@ def _ref_summary(ref: dict) -> dict:
     }
 
 
+def _build_cats(all_refs: list, groups: list) -> tuple[dict, dict]:
+    """Categorize groups; returns (cats_internal, response_cats)."""
+    cats = {k: {'count': 0, 'refs_affected': 0, 'sample': [], 'group_indices': []}
+            for k in ('doi', 'an', 'high', 'med', 'low')}
+    for gi, group in enumerate(groups):
+        cat = _categorize(group)
+        cats[cat]['count'] += 1
+        cats[cat]['refs_affected'] += len(group['members'])
+        cats[cat]['group_indices'].append(gi)
+        if len(cats[cat]['sample']) < 5:
+            cats[cat]['sample'].append({
+                'max_score': round(group['max_score'], 3),
+                'reason':    _primary_reason(group),
+                'members':   [_ref_summary(all_refs[idx]) for idx in group['members'][:3]],
+            })
+    response_cats = {
+        k: {'count': v['count'], 'refs_affected': v['refs_affected'], 'sample': v['sample']}
+        for k, v in cats.items()
+    }
+    return cats, response_cats
+
+
 # ── Session persistence ───────────────────────────────────────
 
 def _save_session(job_id: str, filenames: list[str]):
-    """Persist a completed job to disk."""
-    job = jobs[job_id]
-    sd  = SESSIONS_DIR / job_id
+    """Persist a completed job — to the database if available, otherwise to disk."""
+    job  = jobs[job_id]
+    name = job.get('session_name') or ', '.join(filenames) or 'Sin nombre'
+    mode = job.get('mode_type', 'massive')
+
+    if db.available():
+        db.save_session(
+            job_id=job_id,
+            name=name,
+            mode=mode,
+            created_at=job.get('created_at', ''),
+            filenames=filenames,
+            total_refs=job['total_refs'],
+            total_groups=job['total_groups'],
+            response_cats=job['response_cats'],
+            refs=job['refs'],
+            groups=job['groups'],
+            cats=job['cats'],
+        )
+        return
+
+    # Filesystem fallback
+    sd = SESSIONS_DIR / job_id
     sd.mkdir(exist_ok=True)
     (sd / 'meta.json').write_text(json.dumps({
         'job_id':        job_id,
+        'name':          name,
+        'mode':          mode,
         'created_at':    job.get('created_at', ''),
         'filenames':     filenames,
         'total_refs':    job['total_refs'],
@@ -108,8 +155,29 @@ def _save_session(job_id: str, filenames: list[str]):
 
 
 def _load_session_to_memory(job_id: str):
-    """Load a saved session from disk into the jobs dict (runs in background thread)."""
+    """Load a saved session into the jobs dict (runs in background thread)."""
     try:
+        if db.available():
+            jobs[job_id].update({'pct': 20, 'message': 'Cargando desde base de datos…'})
+            row = db.load_session(job_id)
+            if not row:
+                raise ValueError('Sesión no encontrada en la base de datos')
+            jobs[job_id].update({'pct': 80, 'message': 'Reconstruyendo datos…'})
+            jobs[job_id].update({
+                'status':        'done',
+                'pct':           100,
+                'message':       '¡Listo!',
+                'refs':          row['refs'],
+                'groups':        row['groups_data'],
+                'cats':          row['cats'],
+                'response_cats': row['response_cats'],
+                'total_refs':    row['total_refs'],
+                'total_groups':  row['total_groups'],
+                'mode_type':     row.get('mode', 'massive'),
+            })
+            return
+
+        # Filesystem fallback
         sd = SESSIONS_DIR / job_id
         jobs[job_id].update({'pct': 10, 'message': 'Leyendo metadatos…'})
         meta = json.loads((sd / 'meta.json').read_text(encoding='utf-8'))
@@ -129,6 +197,7 @@ def _load_session_to_memory(job_id: str):
             'response_cats': meta['response_cats'],
             'total_refs':    meta['total_refs'],
             'total_groups':  meta['total_groups'],
+            'mode_type':     meta.get('mode', 'massive'),
         })
     except Exception as exc:
         jobs[job_id].update({'status': 'error', 'pct': 0, 'message': f'Error cargando sesión: {exc}'})
@@ -136,7 +205,8 @@ def _load_session_to_memory(job_id: str):
 
 # ── Background job ────────────────────────────────────────────
 
-def _process_job(job_id: str, file_contents: list[tuple[str, bytes]], config: dict):
+def _process_job(job_id: str, file_contents: list[tuple[str, bytes]], config: dict,
+                 session_name: str = ''):
     try:
         jobs[job_id].update({'status': 'processing', 'pct': 2, 'message': 'Parseando archivos…'})
 
@@ -150,32 +220,11 @@ def _process_job(job_id: str, file_contents: list[tuple[str, bytes]], config: di
         jobs[job_id].update({'pct': 10, 'message': f'Deduplicando {len(all_refs):,} referencias…'})
 
         def progress_cb(pct: int, msg: str):
-            # Map engine's 0-100 into our 10-95 range
             jobs[job_id].update({'pct': 10 + int(pct * 0.85), 'message': msg})
 
         result = run_dedup(all_refs, opts=config, progress_cb=progress_cb)
 
-        # ── Categorize groups ────────────────────────────────
-        cats = {k: {'count': 0, 'refs_affected': 0, 'sample': [], 'group_indices': []}
-                for k in ('doi', 'an', 'high', 'med', 'low')}
-
-        for gi, group in enumerate(result['groups']):
-            cat = _categorize(group)
-            cats[cat]['count'] += 1
-            cats[cat]['refs_affected'] += len(group['members'])
-            cats[cat]['group_indices'].append(gi)
-            if len(cats[cat]['sample']) < 5:
-                cats[cat]['sample'].append({
-                    'max_score': round(group['max_score'], 3),
-                    'reason':    _primary_reason(group),
-                    'members':   [_ref_summary(all_refs[idx]) for idx in group['members'][:3]],
-                })
-
-        # Response-safe copy (no internal group_indices)
-        response_cats = {
-            k: {'count': v['count'], 'refs_affected': v['refs_affected'], 'sample': v['sample']}
-            for k, v in cats.items()
-        }
+        cats, response_cats = _build_cats(all_refs, result['groups'])
 
         jobs[job_id].update({
             'status':        'done',
@@ -183,13 +232,14 @@ def _process_job(job_id: str, file_contents: list[tuple[str, bytes]], config: di
             'message':       '¡Listo!',
             'refs':          all_refs,
             'groups':        result['groups'],
-            'cats':          cats,           # internal (has group_indices)
+            'cats':          cats,
             'response_cats': response_cats,
             'total_refs':    len(all_refs),
             'total_groups':  len(result['groups']),
+            'session_name':  session_name,
+            'mode_type':     'massive',
         })
 
-        # Persist to disk for multi-session support
         filenames = [name for name, _ in file_contents]
         _save_session(job_id, filenames)
 
@@ -211,8 +261,9 @@ async def upload(
     title_weight: float = Form(0.80),
     window_size:  int   = Form(80),
     mode:         str   = Form('both'),
+    session_name: str   = Form(''),
 ):
-    job_id       = uuid.uuid4().hex[:8]
+    job_id        = uuid.uuid4().hex[:8]
     file_contents = [(f.filename or 'archivo.ris', await f.read()) for f in files]
     config = {
         'threshold':       threshold,
@@ -222,12 +273,14 @@ async def upload(
         'mode':            mode,
     }
     jobs[job_id] = {
-        'status':     'queued',
-        'pct':        0,
-        'message':    'En cola…',
-        'created_at': datetime.datetime.now().strftime('%d %b %Y, %H:%M'),
+        'status':       'queued',
+        'pct':          0,
+        'message':      'En cola…',
+        'created_at':   datetime.datetime.now().strftime('%d %b %Y, %H:%M'),
+        'session_name': session_name,
     }
-    t = threading.Thread(target=_process_job, args=(job_id, file_contents, config), daemon=True)
+    t = threading.Thread(
+        target=_process_job, args=(job_id, file_contents, config, session_name), daemon=True)
     t.start()
     return {'job_id': job_id}
 
@@ -334,32 +387,27 @@ async def export_results(job_id: str, request: Request):
       "batch":  { "doi": "confirm"|"skip", "an": "confirm"|"skip" },
       "groups": { "123": "confirm"|"skip", "456": "confirm", ... }
     }
-    batch  = category-level decision for exact-match cats (doi, an).
-    groups = individual group decisions by group_index (for similarity cats).
-    Default for any unspecified group = skip.
     """
     job = jobs.get(job_id)
     if not job or job['status'] != 'done':
         raise HTTPException(400, 'Job no listo')
 
-    body: dict        = await request.json()
-    batch:  dict      = body.get('batch',  {})
-    grp_dec: dict     = body.get('groups', {})   # { str(gi): 'confirm'|'skip' }
+    body: dict    = await request.json()
+    batch: dict   = body.get('batch',  {})
+    grp_dec: dict = body.get('groups', {})
 
     all_refs: list[dict] = job['refs']
     cats:     dict       = job['cats']
 
-    keep_map:  dict      = {r['id']: True for r in all_refs}
+    keep_map:  dict       = {r['id']: True for r in all_refs}
     csv_rows:  list[dict] = []
 
-    # 1. Apply batch decisions for exact categories
     for cat in ('doi', 'an'):
         if batch.get(cat) != 'confirm':
             continue
         for gi in cats[cat]['group_indices']:
             _apply_group_confirm(gi, job, keep_map, csv_rows, cat)
 
-    # 2. Apply individual decisions for similarity categories
     for cat in ('high', 'med', 'low'):
         for gi in cats[cat]['group_indices']:
             if grp_dec.get(str(gi)) == 'confirm':
@@ -367,8 +415,7 @@ async def export_results(job_id: str, request: Request):
 
     kept_refs = [r for r in all_refs if keep_map[r['id']]]
 
-    # Write to temp files
-    tmp_dir = Path(tempfile.gettempdir()) / f'dedup_{job_id}'
+    tmp_dir  = Path(tempfile.gettempdir()) / f'dedup_{job_id}'
     tmp_dir.mkdir(exist_ok=True)
 
     ris_path = tmp_dir / 'deduplicado.ris'
@@ -416,6 +463,27 @@ def download_csv(job_id: str):
 
 @app.get("/api/sessions")
 def list_sessions():
+    if db.available():
+        rows   = db.list_sessions()
+        result = []
+        for row in rows:
+            dec  = row.get('decisions') or {}
+            result.append({
+                'job_id':          row['job_id'],
+                'name':            row.get('name') or ', '.join(row.get('filenames') or []),
+                'mode':            row.get('mode', 'massive'),
+                'created_at':      row.get('created_at', ''),
+                'filenames':       row.get('filenames') or [],
+                'total_refs':      row.get('total_refs', 0),
+                'total_groups':    row.get('total_groups', 0),
+                'response_cats':   row.get('response_cats') or {},
+                'confirmed':       sum(1 for v in dec.get('groups', {}).values() if v == 'confirmed'),
+                'skipped':         sum(1 for v in dec.get('groups', {}).values() if v == 'skipped'),
+                'batch_confirmed': [k for k, v in dec.get('batch', {}).items() if v == 'confirmed'],
+            })
+        return result
+
+    # Filesystem fallback
     result = []
     if not SESSIONS_DIR.exists():
         return result
@@ -425,9 +493,9 @@ def list_sessions():
         meta_path = sd / 'meta.json'
         if not meta_path.exists():
             continue
-        meta = json.loads(meta_path.read_text(encoding='utf-8'))
+        meta    = json.loads(meta_path.read_text(encoding='utf-8'))
         dec_path = sd / 'decisions.json'
-        dec = json.loads(dec_path.read_text(encoding='utf-8')) if dec_path.exists() else {'batch': {}, 'groups': {}}
+        dec     = json.loads(dec_path.read_text(encoding='utf-8')) if dec_path.exists() else {'batch': {}, 'groups': {}}
         meta['confirmed']       = sum(1 for v in dec.get('groups', {}).values() if v == 'confirmed')
         meta['skipped']         = sum(1 for v in dec.get('groups', {}).values() if v == 'skipped')
         meta['batch_confirmed'] = [k for k, v in dec.get('batch', {}).items() if v == 'confirmed']
@@ -439,18 +507,55 @@ def list_sessions():
 def load_session(job_id: str):
     """Start loading a saved session into memory (polls /api/progress/{job_id})."""
     if job_id in jobs and jobs[job_id].get('status') == 'done':
-        return {'job_id': job_id, 'already_loaded': True}
-    sd = SESSIONS_DIR / job_id
-    if not (sd / 'meta.json').exists():
-        raise HTTPException(404, 'Sesión no encontrada')
-    jobs[job_id] = {'status': 'loading', 'pct': 0, 'message': 'Iniciando carga desde disco…'}
+        return {
+            'job_id': job_id,
+            'already_loaded': True,
+            'mode': jobs[job_id].get('mode_type', 'massive'),
+        }
+
+    # Determine mode from storage without loading full data
+    mode = 'massive'
+    if db.available():
+        row = db.load_session(job_id)
+        if not row:
+            raise HTTPException(404, 'Sesión no encontrada')
+        mode = row.get('mode', 'massive')
+    else:
+        sd = SESSIONS_DIR / job_id
+        if not (sd / 'meta.json').exists():
+            raise HTTPException(404, 'Sesión no encontrada')
+        meta = json.loads((sd / 'meta.json').read_text(encoding='utf-8'))
+        mode = meta.get('mode', 'massive')
+
+    jobs[job_id] = {
+        'status':    'loading',
+        'pct':       0,
+        'message':   'Iniciando carga…',
+        'mode_type': mode,
+    }
     t = threading.Thread(target=_load_session_to_memory, args=(job_id,), daemon=True)
     t.start()
-    return {'job_id': job_id, 'already_loaded': False}
+    return {'job_id': job_id, 'already_loaded': False, 'mode': mode}
+
+
+@app.get("/api/sessions/{job_id}/full")
+def get_session_full(job_id: str):
+    """Returns complete refs + groups for Epistemonikos session restore."""
+    job = jobs.get(job_id)
+    if not job or job['status'] != 'done':
+        raise HTTPException(400, 'Job no listo')
+    return {
+        'refs':         job['refs'],
+        'groups':       job['groups'],
+        'total_refs':   job['total_refs'],
+        'total_groups': job['total_groups'],
+    }
 
 
 @app.get("/api/sessions/{job_id}/decisions")
 def get_session_decisions(job_id: str):
+    if db.available():
+        return db.get_decisions(job_id)
     dec_path = SESSIONS_DIR / job_id / 'decisions.json'
     if not dec_path.exists():
         return {'batch': {}, 'groups': {}}
@@ -459,22 +564,65 @@ def get_session_decisions(job_id: str):
 
 @app.post("/api/sessions/{job_id}/decisions")
 async def save_session_decisions(job_id: str, request: Request):
+    body = await request.json()
+    if db.available():
+        db.save_decisions(job_id, body)
+        return {'ok': True}
     sd = SESSIONS_DIR / job_id
     if not sd.exists():
         raise HTTPException(404, 'Sesión no encontrada')
-    body = await request.json()
     (sd / 'decisions.json').write_text(json.dumps(body, ensure_ascii=False), encoding='utf-8')
     return {'ok': True}
 
 
 @app.delete("/api/sessions/{job_id}")
 def delete_session(job_id: str):
-    sd = SESSIONS_DIR / job_id
-    if sd.exists():
-        shutil.rmtree(sd)
+    if db.available():
+        db.delete_session(job_id)
+    else:
+        sd = SESSIONS_DIR / job_id
+        if sd.exists():
+            shutil.rmtree(sd)
     if job_id in jobs:
         del jobs[job_id]
     return {'ok': True}
+
+
+@app.post("/api/sessions/save")
+async def save_client_session(request: Request):
+    """
+    Saves a client-side computed session (Epistemonikos mode).
+    Body: { name, mode, filenames, refs, groups }
+    Returns: { job_id, created_at }
+    """
+    body     = await request.json()
+    job_id   = uuid.uuid4().hex[:8]
+    all_refs = body.get('refs', [])
+    groups   = body.get('groups', [])
+    filenames = body.get('filenames', [])
+    name      = body.get('name') or ', '.join(filenames) or 'Sin nombre'
+    mode      = body.get('mode', 'epistemo')
+    created_at = datetime.datetime.now().strftime('%d %b %Y, %H:%M')
+
+    cats, response_cats = _build_cats(all_refs, groups)
+
+    jobs[job_id] = {
+        'status':        'done',
+        'pct':           100,
+        'message':       '¡Listo!',
+        'refs':          all_refs,
+        'groups':        groups,
+        'cats':          cats,
+        'response_cats': response_cats,
+        'total_refs':    len(all_refs),
+        'total_groups':  len(groups),
+        'created_at':    created_at,
+        'session_name':  name,
+        'mode_type':     mode,
+    }
+
+    _save_session(job_id, filenames)
+    return {'job_id': job_id, 'created_at': created_at}
 
 
 # ── Serve static frontend ─────────────────────────────────────

@@ -2,6 +2,125 @@
    DETECTOR DE DUPLICADOS RIS — app.js
    ========================================================= */
 
+/* ==========================================================
+   HOME SCREEN
+   ========================================================== */
+
+async function homeShow() {
+  showSection('sec-home');
+  const list = document.getElementById('home-sessions-list');
+  list.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8">Cargando sesiones…</div>';
+  try {
+    const res      = await fetch('/api/sessions');
+    if (!res.ok) throw new Error('Backend no disponible');
+    const sessions = await res.json();
+    homeRender(sessions);
+  } catch {
+    list.innerHTML = `<div class="sessions-empty">
+      <p style="font-weight:600">No se pudo cargar el listado</p>
+      <p style="font-size:.85rem;color:#94a3b8;margin-top:4px">
+        Asegúrate de que el backend esté corriendo, o inicia un nuevo análisis.
+      </p>
+    </div>`;
+  }
+}
+
+function homeRender(sessions, filter = '') {
+  const list = document.getElementById('home-sessions-list');
+  const q    = filter.toLowerCase().trim();
+
+  const visible = q
+    ? sessions.filter(s => {
+        const name  = (s.name || '').toLowerCase();
+        const files = (s.filenames || []).join(' ').toLowerCase();
+        return name.includes(q) || files.includes(q);
+      })
+    : sessions;
+
+  if (!visible.length) {
+    list.innerHTML = `<div class="sessions-empty">
+      <p style="font-weight:600">${q ? 'Sin resultados para "' + filter + '"' : 'No hay sesiones guardadas'}</p>
+      <p style="font-size:.85rem;color:#94a3b8;margin-top:4px">
+        ${q ? 'Prueba con otro término.' : 'Sube archivos RIS para comenzar.'}
+      </p>
+    </div>`;
+    return;
+  }
+
+  list.innerHTML = visible.map(s => _homeSessionCard(s)).join('');
+
+  list.querySelectorAll('.home-btn-resume').forEach(btn =>
+    btn.addEventListener('click', () => massiveResumeSession(btn.dataset.jobId))
+  );
+  list.querySelectorAll('.home-btn-delete').forEach(btn =>
+    btn.addEventListener('click', () => homeDeleteSession(btn.dataset.jobId))
+  );
+}
+
+function _homeSessionCard(s) {
+  const mode      = s.mode || 'massive';
+  const modeLabel = mode === 'epistemo' ? 'Epistemonikos' : 'Gran Escala';
+  const modeCls   = mode === 'epistemo' ? 'mode-epistemo' : 'mode-massive';
+  const total     = s.total_groups || 0;
+  const done      = (s.confirmed || 0) + (s.skipped || 0);
+  const pct       = total > 0 ? Math.round(done / total * 100) : 0;
+  const files     = (s.filenames || []).join(', ') || 'Sin nombre';
+  const name      = s.name || files;
+
+  return `<div class="session-card">
+    <div class="session-card-info">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span class="home-session-mode ${modeCls}">${modeLabel}</span>
+        <span class="session-card-file">${name}</span>
+      </div>
+      <div class="session-card-meta">${s.created_at || ''} · ${(s.total_refs || 0).toLocaleString()} refs · ${total.toLocaleString()} grupos</div>
+      <div class="session-card-progress">
+        <div class="session-progress-bar"><div class="session-progress-fill" style="width:${pct}%"></div></div>
+        <span class="session-progress-label">${done.toLocaleString()} revisados · <strong>${(total - done).toLocaleString()} pendientes</strong></span>
+      </div>
+    </div>
+    <div class="session-card-actions">
+      <button class="btn-primary home-btn-resume" data-job-id="${s.job_id}">Abrir →</button>
+      <button class="btn-text home-btn-delete" data-job-id="${s.job_id}" style="color:#f87171;font-size:.8rem">Eliminar</button>
+    </div>
+  </div>`;
+}
+
+async function homeDeleteSession(jobId) {
+  if (!confirm('¿Eliminar esta sesión? Se perderán las decisiones guardadas.')) return;
+  await fetch(`/api/sessions/${jobId}`, { method: 'DELETE' });
+  homeShow();
+}
+
+/* Home search wiring (called from DOMContentLoaded) */
+function homeInitSearch(sessions) {
+  const input = document.getElementById('home-search');
+  if (!input) return;
+  input.addEventListener('input', () => homeRender(sessions, input.value));
+}
+
+// Override homeShow to also wire search after load
+async function homeShowFull() {
+  showSection('sec-home');
+  const list = document.getElementById('home-sessions-list');
+  list.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8">Cargando sesiones…</div>';
+  const input = document.getElementById('home-search');
+  if (input) input.value = '';
+
+  try {
+    const res      = await fetch('/api/sessions');
+    if (!res.ok) throw new Error();
+    const sessions = await res.json();
+    homeRender(sessions);
+    if (input) input.oninput = () => homeRender(sessions, input.value);
+  } catch {
+    list.innerHTML = `<div class="sessions-empty">
+      <p style="font-weight:600">No se pudo conectar al backend</p>
+      <p style="font-size:.85rem;color:#94a3b8;margin-top:4px">Asegúrate de que el servidor esté corriendo.</p>
+    </div>`;
+  }
+}
+
 const st = {
   files:       [],   // { name, refs[] }
   allRefs:     [],
@@ -589,6 +708,9 @@ async function epistRunAnalysis() {
   setProgress('¡Listo!', 100);
   await delay(200);
   epistemShowSection('sec-epist-results');
+
+  // Auto-save to backend when analysis finishes
+  epistemSaveToBackend();
 }
 
 // ── Render results ──────────────────────────────────────────
@@ -916,6 +1038,7 @@ function epistRenderPending() {
       });
       _epistSel.delete(i);
       ep.discarded.add(i);
+      epistemSaveDecisions();
 
       // If there are unchecked non-kept refs, they become a new mini-group? No — just discard the whole group.
       ep.page = Math.max(0, Math.min(ep.page,
@@ -930,6 +1053,7 @@ function epistRenderPending() {
     btn.addEventListener('click', () => {
       _epistSel.delete(+btn.dataset.grp);
       ep.discarded.add(+btn.dataset.grp);
+      epistemSaveDecisions();
       epistRenderResults();
     });
   });
@@ -1040,7 +1164,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('btn-back').addEventListener('click', () => {
     document.getElementById('header-stats').style.display = 'none';
-    showSection('sec-upload');
+    homeShowFull();
   });
 
   // ── Tab switcher ──────────────────────────────────────────
@@ -1099,7 +1223,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('epist-btn-export-csv').addEventListener('click', epistExportCSV);
 
   document.getElementById('epist-btn-back').addEventListener('click', () => {
-    showSection('sec-epist-upload');
+    ep.backendJobId = null;
+    homeShowFull();
   });
 
   document.querySelectorAll('.epist-cat-tab').forEach(tab => {
@@ -1138,8 +1263,16 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.textContent = visible ? 'Ver tabla de confirmados ▾' : 'Ocultar tabla ▴';
   });
 
+  // ── Home screen init ──────────────────────────────────────
+  document.getElementById('home-btn-new')?.addEventListener('click', () => {
+    showSection('sec-upload');
+  });
+
   // ── Massive mode init ─────────────────────────────────────
   massiveInit();
+
+  // Open home screen on load
+  homeShowFull();
 });
 
 /* ==========================================================
@@ -1244,6 +1377,7 @@ async function massiveResumeSession(jobId) {
     const loadRes  = await fetch(`/api/sessions/${jobId}/load`, { method: 'POST' });
     const loadData = await loadRes.json();
     mv.jobId = jobId;
+    const mode = loadData.mode || 'massive';
 
     if (!loadData.already_loaded) {
       await new Promise((resolve, reject) => {
@@ -1258,7 +1392,12 @@ async function massiveResumeSession(jobId) {
       });
     }
 
-    // Restore saved decisions
+    if (mode === 'epistemo') {
+      await epistemLoadFromBackend(jobId);
+      return;
+    }
+
+    // Restore saved decisions for massive mode
     const dec = await (await fetch(`/api/sessions/${jobId}/decisions`)).json();
     mv.batchDecisions = { doi: dec.batch?.doi || null, an: dec.batch?.an || null };
     mv.groupDecisions = dec.groups || {};
@@ -1266,7 +1405,103 @@ async function massiveResumeSession(jobId) {
     await massiveLoadResults();
   } catch (e) {
     showToast('Error cargando sesión: ' + e.message, 'error');
-    massiveShowSessions();
+    homeShowFull();
+  }
+}
+
+/* ── Epistemonikos backend persistence ───────────────────── */
+
+async function epistemSaveToBackend() {
+  try {
+    const filenames = ep.files.map(f => f.name);
+    const res = await fetch('/api/sessions/save', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name:      filenames.join(', ') || 'Sin nombre',
+        mode:      'epistemo',
+        filenames,
+        refs:      ep.allRefs,
+        groups:    ep.groups,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      ep.backendJobId = data.job_id;
+      showToast('Sesión guardada', 'success');
+    }
+  } catch { /* backend may not be available */ }
+}
+
+let _epistSaveTimer = null;
+function epistemSaveDecisions() {
+  if (!ep.backendJobId) return;
+  clearTimeout(_epistSaveTimer);
+  _epistSaveTimer = setTimeout(async () => {
+    const refIdx = r => ep.allRefs.indexOf(r);
+    const decisions = {
+      batch:  {},
+      groups: {},
+      epist: {
+        confirmed: ep.confirmed.map(c => ({
+          keptId:     c.kept.id,
+          removedIds: c.removed.map(r => r.id),
+          reason:     c.reason,
+        })),
+        discarded: [...ep.discarded],
+      },
+    };
+    try {
+      await fetch(`/api/sessions/${ep.backendJobId}/decisions`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(decisions),
+      });
+    } catch {}
+  }, 800);
+}
+
+async function epistemLoadFromBackend(jobId) {
+  try {
+    showSection('sec-processing');
+    setProgress('Cargando sesión Epistemonikos…', 20);
+
+    const fullRes = await fetch(`/api/sessions/${jobId}/full`);
+    if (!fullRes.ok) throw new Error('No se pudo cargar la sesión');
+    const data = await fullRes.json();
+
+    setProgress('Restaurando referencias…', 60);
+    ep.allRefs      = data.refs;
+    ep.groups       = data.groups;
+    ep.files        = [];
+    ep.page         = 0;
+    ep.backendJobId = jobId;
+    _epistSel.clear();
+
+    setProgress('Restaurando decisiones…', 80);
+    const dec      = await (await fetch(`/api/sessions/${jobId}/decisions`)).json();
+    ep.confirmed   = [];
+    ep.discarded   = new Set();
+
+    const epistDec = dec.epist || {};
+    const refById  = new Map(ep.allRefs.map(r => [r.id, r]));
+
+    for (const c of (epistDec.confirmed || [])) {
+      const kept    = refById.get(c.keptId);
+      const removed = (c.removedIds || []).map(id => refById.get(id)).filter(Boolean);
+      if (kept) ep.confirmed.push({ kept, removed, reason: c.reason });
+    }
+    for (const idx of (epistDec.discarded || [])) {
+      ep.discarded.add(idx);
+    }
+
+    setProgress('¡Listo!', 100);
+    await delay(200);
+    epistRenderResults();
+    epistemShowSection('sec-epist-results');
+  } catch (e) {
+    showToast('Error cargando sesión: ' + e.message, 'error');
+    homeShowFull();
   }
 }
 
