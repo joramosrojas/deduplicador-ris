@@ -1,6 +1,8 @@
 /* =========================================================
    HOME SEARCH
    ========================================================= */
+.app-tab-home { border-right: 1px solid var(--border); margin-right: 4px; }
+
 .home-search-input {
   padding: 8px 14px;
   border: 1px solid var(--border);

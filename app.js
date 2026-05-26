@@ -1272,6 +1272,12 @@ document.addEventListener('DOMContentLoaded', () => {
     showSection('sec-upload');
   });
 
+  document.getElementById('btn-home-tab')?.addEventListener('click', () => {
+    document.querySelectorAll('.app-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('btn-home-tab').classList.add('active');
+    homeShowFull();
+  });
+
   // ── Massive mode init ─────────────────────────────────────
   massiveInit();
 
