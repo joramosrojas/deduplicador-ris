@@ -63,9 +63,14 @@ def _primary_reason(group: dict) -> str:
     return best or 'title'
 
 
+def _max_score(group: dict) -> float:
+    """Handles both snake_case (Python engine) and camelCase (JS engine) group dicts."""
+    return group.get('max_score') or group.get('maxScore') or 0.0
+
+
 def _categorize(group: dict) -> str:
     reason = _primary_reason(group)
-    score  = group['max_score']
+    score  = _max_score(group)
     if reason == 'doi':             return 'doi'
     if reason == 'an':              return 'an'
     if score >= 0.90:               return 'high'
@@ -95,7 +100,7 @@ def _build_cats(all_refs: list, groups: list) -> tuple[dict, dict]:
         cats[cat]['group_indices'].append(gi)
         if len(cats[cat]['sample']) < 5:
             cats[cat]['sample'].append({
-                'max_score': round(group['max_score'], 3),
+                'max_score': round(_max_score(group), 3),
                 'reason':    _primary_reason(group),
                 'members':   [_ref_summary(all_refs[idx]) for idx in group['members'][:3]],
             })
