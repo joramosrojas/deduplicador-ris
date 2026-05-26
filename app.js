@@ -66,6 +66,11 @@ function _homeSessionCard(s) {
   const pct       = total > 0 ? Math.round(done / total * 100) : 0;
   const files     = (s.filenames || []).join(', ') || 'Sin nombre';
   const name      = s.name || files;
+  const totalRefs = s.total_refs || 0;
+  const remaining = s.refs_remaining !== undefined ? s.refs_remaining : totalRefs;
+  const refsLabel = remaining < totalRefs
+    ? `${remaining.toLocaleString()} refs únicas (de ${totalRefs.toLocaleString()})`
+    : `${totalRefs.toLocaleString()} refs`;
 
   return `<div class="session-card">
     <div class="session-card-info">
@@ -73,7 +78,7 @@ function _homeSessionCard(s) {
         <span class="home-session-mode ${modeCls}">${modeLabel}</span>
         <span class="session-card-file">${name}</span>
       </div>
-      <div class="session-card-meta">${s.created_at || ''} · ${(s.total_refs || 0).toLocaleString()} refs · ${total.toLocaleString()} grupos</div>
+      <div class="session-card-meta">${s.created_at || ''} · ${refsLabel} · ${total.toLocaleString()} grupos</div>
       <div class="session-card-progress">
         <div class="session-progress-bar"><div class="session-progress-fill" style="width:${pct}%"></div></div>
         <span class="session-progress-label">${done.toLocaleString()} revisados · <strong>${(total - done).toLocaleString()} pendientes</strong></span>
@@ -1356,17 +1361,22 @@ async function massiveShowSessions() {
 }
 
 function _sessionCard(s) {
-  const total   = s.total_groups || 0;
-  const done    = (s.confirmed || 0) + (s.skipped || 0);
-  const pend    = total - done;
-  const pct     = total > 0 ? Math.round(done / total * 100) : 0;
-  const files   = (s.filenames || []).join(', ') || 'Sin nombre';
-  const batches = (s.batch_confirmed || [])
+  const total     = s.total_groups || 0;
+  const done      = (s.confirmed || 0) + (s.skipped || 0);
+  const pend      = total - done;
+  const pct       = total > 0 ? Math.round(done / total * 100) : 0;
+  const files     = (s.filenames || []).join(', ') || 'Sin nombre';
+  const batches   = (s.batch_confirmed || [])
     .map(k => `<span class="session-batch-tag">${_CAT_META[k]?.label || k}</span>`).join('');
+  const totalRefs = s.total_refs || 0;
+  const remaining = s.refs_remaining !== undefined ? s.refs_remaining : totalRefs;
+  const refsLabel = remaining < totalRefs
+    ? `${remaining.toLocaleString()} refs únicas (de ${totalRefs.toLocaleString()})`
+    : `${totalRefs.toLocaleString()} refs`;
   return `<div class="session-card">
     <div class="session-card-info">
       <div class="session-card-file">${files}</div>
-      <div class="session-card-meta">${s.created_at || ''} · ${(s.total_refs || 0).toLocaleString()} refs · ${total.toLocaleString()} grupos</div>
+      <div class="session-card-meta">${s.created_at || ''} · ${refsLabel} · ${total.toLocaleString()} grupos</div>
       ${batches ? `<div class="session-batch-tags">Confirmados en bloque: ${batches}</div>` : ''}
       <div class="session-card-progress">
         <div class="session-progress-bar"><div class="session-progress-fill" style="width:${pct}%"></div></div>

@@ -472,14 +472,18 @@ def list_sessions():
         rows   = db.list_sessions()
         result = []
         for row in rows:
-            dec  = row.get('decisions') or {}
+            dec        = row.get('decisions') or {}
+            total_refs = row.get('total_refs', 0) or 0
+            epist_conf = dec.get('epist', {}).get('confirmed', [])
+            removed    = sum(len(c.get('removedIds', [])) for c in epist_conf)
             result.append({
                 'job_id':          row['job_id'],
                 'name':            row.get('name') or ', '.join(row.get('filenames') or []),
                 'mode':            row.get('mode', 'massive'),
                 'created_at':      row.get('created_at', ''),
                 'filenames':       row.get('filenames') or [],
-                'total_refs':      row.get('total_refs', 0),
+                'total_refs':      total_refs,
+                'refs_remaining':  max(0, total_refs - removed),
                 'total_groups':    row.get('total_groups', 0),
                 'response_cats':   row.get('response_cats') or {},
                 'confirmed':       sum(1 for v in dec.get('groups', {}).values() if v == 'confirmed'),
