@@ -1175,7 +1175,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tab.classList.add('active');
       activeTab = tab.dataset.tab;
       if      (activeTab === 'general') showSection('sec-upload');
-      else if (activeTab === 'epistemo') showSection('sec-epist-upload');
+      else if (activeTab === 'epistemo') epistemShowSessions();
       else if (activeTab === 'massive') { massiveShowSessions(); }
     });
   });
@@ -1224,7 +1224,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('epist-btn-back').addEventListener('click', () => {
     ep.backendJobId = null;
-    homeShowFull();
+    epistemShowSessions();
+  });
+
+  document.getElementById('epist-sessions-btn-new')?.addEventListener('click', () => {
+    showSection('sec-epist-upload');
   });
 
   document.querySelectorAll('.epist-cat-tab').forEach(tab => {
@@ -1271,7 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Massive mode init ─────────────────────────────────────
   massiveInit();
 
-  // Open home screen on load
+  // Open home screen on load (shows all sessions across all modes)
   homeShowFull();
 });
 
@@ -1409,6 +1413,39 @@ async function massiveResumeSession(jobId) {
   }
 }
 
+/* ── Epistemonikos sessions list ────────────────────────── */
+
+async function epistemShowSessions() {
+  showSection('sec-epist-sessions');
+  const list = document.getElementById('epist-sessions-list');
+  list.innerHTML = '<div style="text-align:center;padding:40px;color:#94a3b8">Cargando sesiones…</div>';
+  try {
+    const res  = await fetch('/api/sessions');
+    const all  = await res.json();
+    const sessions = all.filter(s => (s.mode || 'epistemo') === 'epistemo');
+    if (!sessions.length) {
+      list.innerHTML = `<div class="sessions-empty">
+        <p style="font-weight:600">No hay sesiones guardadas</p>
+        <p style="font-size:.85rem;color:#94a3b8;margin-top:4px">Sube archivos RIS para comenzar.</p>
+      </div>`;
+      return;
+    }
+    list.innerHTML = sessions.map(_sessionCard).join('');
+    list.querySelectorAll('.sessions-btn-resume').forEach(btn =>
+      btn.addEventListener('click', () => massiveResumeSession(btn.dataset.jobId))
+    );
+    list.querySelectorAll('.sessions-btn-delete').forEach(btn =>
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Eliminar esta sesión?')) return;
+        await fetch(`/api/sessions/${btn.dataset.jobId}`, { method: 'DELETE' });
+        epistemShowSessions();
+      })
+    );
+  } catch {
+    list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171">Backend no disponible</div>';
+  }
+}
+
 /* ── Epistemonikos backend persistence ───────────────────── */
 
 async function epistemSaveToBackend() {
@@ -1428,7 +1465,7 @@ async function epistemSaveToBackend() {
     if (res.ok) {
       const data = await res.json();
       ep.backendJobId = data.job_id;
-      showToast('Sesión guardada', 'success');
+      showToast('Sesión guardada — disponible en "Epistemonikos → Sesiones"', 'success');
     }
   } catch { /* backend may not be available */ }
 }
